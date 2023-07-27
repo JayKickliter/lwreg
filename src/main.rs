@@ -74,8 +74,7 @@ impl Cli {
 
                 // Append region-name LuT to end of `out` and write
                 // its position the end of the file.
-                disktree_file.seek(SeekFrom::End(0))?;
-                let region_name_lut_pos = disktree_file.stream_position()?;
+                let region_name_lut_pos = disktree_file.seek(SeekFrom::End(0))?;
                 bincode::serialize_into(&mut disktree_file, &region_name_lut)?;
                 disktree_file.write_u64::<LE>(region_name_lut_pos)?;
             }
