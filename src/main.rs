@@ -1,7 +1,4 @@
-#![feature(iter_intersperse)]
-#![feature(path_file_prefix)]
-
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian as LE, ReadBytesExt, WriteBytesExt};
 use clap::Parser;
 use flate2::read::GzDecoder;
@@ -39,15 +36,25 @@ impl Cli {
             Cli::Generate { out, sets } => {
                 // [(Region, Input File), ..]
                 let inputs = {
-                    let mut inputs: Vec<(String, File)> = sets
-                        .into_iter()
-                        .map(|path| {
-                            (
-                                path.file_prefix().unwrap().to_str().unwrap().to_owned(),
-                                File::open(path).unwrap(),
-                            )
-                        })
-                        .collect();
+                    let mut inputs: Vec<(String, File)> = Vec::new();
+                    for path in sets {
+                        // Extract filename until the first '.'
+                        let name = path
+                            .file_name()
+                            .ok_or_else(|| anyhow!("not a file path: {}", path.to_string_lossy()))?
+                            .to_str()
+                            .ok_or_else(|| {
+                                anyhow!("bad chars in file name: {}", path.to_string_lossy())
+                            })?
+                            .chars()
+                            .take_while(|&c| c != '.')
+                            .collect::<String>();
+
+                        let file = File::open(path)?;
+                        inputs.push((name, file));
+                    }
+                    // Not necessary, but makes debugging easier
+                    // when viewing region name LuT in a hex editor.
                     inputs.sort_by(|a, b| a.0.cmp(&b.0));
                     inputs
                 };
