@@ -64,8 +64,8 @@ impl Cli {
                 // store the index into region-string LuT.
                 let mut region_map: HexTreeMap<u8> = HexTreeMap::new();
                 for (n, (_name, file)) in inputs.iter().enumerate() {
-                    let mut reader = GzDecoder::new(file);
-                    while let Ok(entry) = reader.read_u64::<LE>() {
+                    let mut rdr = GzDecoder::new(file);
+                    while let Ok(entry) = rdr.read_u64::<LE>() {
                         region_map.insert(Cell::try_from(entry)?, n as u8);
                     }
                 }
@@ -77,7 +77,7 @@ impl Cli {
 
                 // Turn the HexTreeMap into a disktree at `out`.
                 let mut disktree_file = File::create(out)?;
-                region_map.to_disktree(&mut disktree_file)?;
+                region_map.to_disktree(&mut disktree_file, |wtr, &val| wtr.write_u8(val))?;
 
                 // Append region-name LuT to end of `out` and write
                 // its position the end of the file.
@@ -98,9 +98,10 @@ impl Cli {
 
                 let mut disktree = DiskTree::from_reader(disktree_file)?;
 
-                let (_, region_name_lut_idx) = disktree
-                    .get::<u8>(cell)?
+                let (_, rdr) = disktree
+                    .seek_to_cell(cell)?
                     .ok_or_else(|| anyhow::anyhow!("no entry"))?;
+                let region_name_lut_idx = rdr.read_u8()?;
 
                 let val = region_name_lut
                     .get(region_name_lut_idx as usize)

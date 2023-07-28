@@ -319,9 +319,8 @@ checksum = "443144c8cdadd93ebf52ddb4056d257f5b52c04d3c804e657d19eb73fc33668b"
 [[package]]
 name = "hextree"
 version = "0.3.1"
-source = "git+https://github.com/JayKickliter/hextree?branch=jsk/add-disk-repr#62d05692ee4d757ae1aa6483844701b69c8b95e3"
+source = "git+https://github.com/JayKickliter/hextree?branch=jsk/add-disk-repr#3033d7fc57efd0d4798fa37bb9529c717de164b8"
 dependencies = [
- "bincode",
  "byteorder",
  "serde",
 ]
