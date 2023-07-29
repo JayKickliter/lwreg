@@ -9,8 +9,10 @@ bincode = "1"
 byteorder = "1"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
-h3o = { version = "0" }
+geojson = "0"
+h3o = {version = "0", features = ["geo"]}
 hextree = { git = "https://github.com/JayKickliter/hextree", branch = "jsk/add-disk-repr" }
+serde_json = "*"
 
 [profile.release]
 debug = true
