@@ -1,3 +1,7 @@
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian as LE, ReadBytesExt, WriteBytesExt};
 use clap::Parser;
@@ -8,12 +12,17 @@ use h3o::{
     CellIndex, Resolution,
 };
 use hextree::{disktree::DiskTree, Cell, HexTreeMap};
+use rayon::prelude::*;
 use serde_json::Value;
 use std::{
     fs::File,
     io::{Seek, SeekFrom},
     path::PathBuf,
+    sync::mpsc,
+    thread,
 };
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
 
 #[derive(Debug, clap::Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -66,6 +75,12 @@ fn to_cells(
     Ok((idx, properties, cells))
 }
 
+fn dedup_cells(mut cells: Vec<CellIndex>) -> Result<Vec<CellIndex>> {
+    cells.sort_unstable();
+    cells.dedup();
+    Ok(cells)
+}
+
 fn compact_cells(cells: Vec<CellIndex>) -> Result<Vec<CellIndex>> {
     let compacted = CellIndex::compact(cells)?;
     Ok(compacted.collect())
@@ -79,26 +94,64 @@ impl Cli {
                 out,
                 world,
             } => {
-                let json = GeoJson::from_reader(File::open(world)?)?;
                 let mut disktree_file = File::create(out)?;
-                let world = FeatureCollection::try_from(json)?;
+                let feature_collection = {
+                    let geojson_file = File::open(world)?;
+                    let geojson = GeoJson::from_reader(geojson_file)?;
+                    FeatureCollection::try_from(geojson)?
+                };
 
                 let mut world_map: HexTreeMap<u8> = HexTreeMap::new();
-                let mut property_lut = Vec::new();
+                let mut property_lut: Vec<(u8, String)> = Vec::new();
 
-                for (idx, feature) in world.features.into_iter().enumerate() {
-                    let idx = u8::try_from(idx)?;
-                    let (_, properties, plain_cells) = to_cells(idx, feature, resolution)?;
-                    let compact_cells = compact_cells(plain_cells)?;
-                    for cell in compact_cells {
-                        let cell = hextree::Cell::from_raw(cell.into())?;
-                        world_map.insert(cell, idx);
+                let (sender, rx) = mpsc::channel::<(u8, String, Vec<CellIndex>)>();
+
+                let thread_handle = thread::spawn(move || {
+                    feature_collection
+                        .features
+                        .into_par_iter()
+                        .enumerate()
+                        .try_for_each_with(
+                            (sender.clone(), resolution),
+                            |(sender, resolution), (lut_idx, feature)| {
+                                fn work_fun(
+                                    idx: usize,
+                                    feature: Feature,
+                                    res: Resolution,
+                                    tx: &mut mpsc::Sender<(u8, String, Vec<CellIndex>)>,
+                                ) -> Result<()> {
+                                    let idx = u8::try_from(idx)?;
+                                    let (_, properties, cells) = to_cells(idx, feature, res)?;
+                                    let cells = dedup_cells(cells)?;
+                                    let cells = compact_cells(cells)?;
+                                    let properties = Value::Object(properties);
+                                    tx.send((idx, properties.to_string(), cells))?;
+                                    Ok(())
+                                }
+                                work_fun(lut_idx, feature, *resolution, sender)
+                            },
+                        )
+                });
+
+                while let Ok((lut_idx, properties, cells)) = rx.recv() {
+                    property_lut.push((lut_idx, properties));
+                    for cell in cells {
+                        let cell = Cell::from_raw(cell.into())?;
+                        world_map.insert(cell, lut_idx);
                     }
-                    let properties = Value::Object(properties);
-                    property_lut.push(properties.to_string());
                 }
 
+                thread_handle
+                    .join()
+                    .map_err(|join_err| anyhow!("thread join {:?}", join_err))
+                    .unwrap()?;
+
                 world_map.to_disktree(&mut disktree_file, |wtr, &val| wtr.write_u8(val))?;
+                property_lut.sort_by_key(|(lut_idx, _)| *lut_idx);
+                let property_lut: Vec<String> = property_lut
+                    .into_iter()
+                    .map(|(_lut_idx, properties)| properties)
+                    .collect();
 
                 // Append country LuT to end of `out` and write
                 // its position the end of the file.
